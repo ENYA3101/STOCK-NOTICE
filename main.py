@@ -3,9 +3,8 @@ import datetime
 import os
 
 def parse_date(date_str):
-    """最強力解析：只管找出數字部分"""
+    """強力解析日期：支援 115/01/01 或 20260101"""
     if not date_str: return None
-    # 只留下數字
     s = "".join(filter(str.isdigit, str(date_str)))
     try:
         if len(s) == 7: # 民國: 1150101
@@ -18,80 +17,93 @@ def parse_date(date_str):
 
 def get_real_data():
     all_stocks = []
-    # 1. 抓取上櫃 (TPEx)
+    
+    # 1. 抓取上市 (TWSE) 
+    # 欄位順序：編號[0], 公布日期[1], 證券代號[2], 證券名稱[3], 累計[4], 處置條件[5], 處置起迄時間[6]...
+    try:
+        r = requests.get("https://www.twse.com.tw/rwd/zh/announcement/punish?response=json", timeout=15)
+        items = r.json().get('data', [])
+        for i in items:
+            if len(i) < 7: continue
+            
+            # 解析「處置起迄時間」，通常格式為 2025/12/29～2026/01/12
+            raw_time = i[6]
+            period = raw_time.split('～') if '～' in raw_time else raw_time.split('-')
+            
+            if len(period) >= 2:
+                all_stocks.append({
+                    'id': i[2],           # 證券代號
+                    'name': i[3],         # 證券名稱
+                    'announce': parse_date(i[1]), # 公布日期
+                    'start': parse_date(period[0]),
+                    'end': parse_date(period[1]),
+                    'range': raw_time     # 處置起迄時間原始文字
+                })
+    except Exception as e:
+        print(f"上市抓取失敗: {e}")
+
+    # 2. 抓取上櫃 (TPEx)
+    # 欄位順序：公布日期[0], 證券代號[1], 證券名稱[2], 處置起迄時間[3]...
     try:
         r = requests.get("https://www.tpex.org.tw/web/stock/margin_trading/disposal/disposal_result.php?l=zh-tw", timeout=15)
         data = r.json().get('aaData', [])
         for i in data:
             if len(i) < 4: continue
-            end_d = parse_date(i[3].split('-')[-1]) # 取區間最後一個日期
+            period = i[3].split('-')
             all_stocks.append({
-                'id': i[1], 'name': i[2], 
-                'announce_raw': str(i[0]),
-                'end': end_d, 
+                'id': i[1], 
+                'name': i[2], 
+                'announce': parse_date(i[0]),
+                'start': parse_date(period[0]),
+                'end': parse_date(period[1]),
                 'range': i[3]
             })
-    except: pass
-
-    # 2. 抓取上市 (TWSE)
-    try:
-        r = requests.get("https://www.twse.com.tw/rwd/zh/announcement/punish?response=json", timeout=15)
-        items = r.json().get('data', [])
-        for i in items:
-            if len(i) < 5: continue
-            # 證交所：0:公告日, 1:代號, 2:名稱, 4:結束日
-            all_stocks.append({
-                'id': i[1], 'name': i[2], 
-                'announce_raw': str(i[0]),
-                'end': parse_date(i[4]), 
-                'range': f"{i[3]}-{i[4]}"
-            })
-    except: pass
+    except Exception as e:
+        print(f"上櫃抓取失敗: {e}")
+    
     return all_stocks
 
 def main():
     today = datetime.date.today()
     stocks = get_real_data()
     
-    new_announcement = [] 
-    out_of_jail = []      
-    still_in = []         
+    new_announcement = [] # 今日新公告進關
+    out_of_jail = []      # 本日出關
+    still_in = []         # 處置中
 
     for s in stocks:
-        # 如果結束日解析失敗，這筆才跳過
-        if not s['end']:
-            continue
+        if not s['end']: continue
         
-        exit_date = s['end'] + datetime.timedelta(days=1)
-        info = f"{s['name']}({s['id']}) {s['range']}"
+        exit_day = s['end'] + datetime.timedelta(days=1)
+        info = f"{s['name']}({s['id']}) 期間：{s['range']}"
         
-        # --- 寬鬆比對公告日 ---
-        # 只要公告日期字串包含今天日期的數字，就當作是今日公告
-        today_str_roc = f"{today.year-1911}/{today.month:02d}/{today.day:02d}"
-        today_str_iso = today.strftime("%Y%m%d")
+        # A. 判斷今日出關 (結束日+1 = 今天)
+        if exit_day == today:
+            out_of_jail.append(info)
         
-        if today_str_roc in s['announce_raw'] or today_str_iso in s['announce_raw']:
+        # B. 判斷今日新公告進關 (公布日期 = 今天)
+        elif s['announce'] == today:
             new_announcement.append(f"🔔 {info}")
         
-        # --- 處置狀態比對 ---
-        if exit_date == today:
-            out_of_jail.append(info)
-        elif s['end'] >= today:
-            still_in.append(info)
+        # C. 判斷處置中 (只要還在處置結束日之前)
+        if s['end'] >= today:
+            # 避免重複放入「今日新公告」的股票
+            if not any(s['id'] in x for x in new_announcement):
+                still_in.append(info)
 
+    # 組合訊息
     msg = f"📅 報表日期：{today}\n\n"
     msg += "【🔔 今日新公告進關】\n" + ("\n".join(new_announcement) if new_announcement else "無") + "\n\n"
-    msg += "【本日出關】\n" + ("\n".join(out_of_jail) if out_of_jail else "無") + "\n\n"
-    msg += "【所有處置中明細】\n" + ("\n".join(still_in) if still_in else "無")
+    msg += "【🔓 本日出關股票】\n" + ("\n".join(out_of_jail) if out_of_jail else "無") + "\n\n"
+    msg += "【⏳ 正在處置中明細】\n" + ("\n".join(still_in) if still_in else "無")
 
+    # 發送 Telegram
     token = os.getenv("TG_TOKEN")
     chat_id = os.getenv("CHAT_ID")
     if token and chat_id:
         requests.post(f"https://api.telegram.org/bot{token}/sendMessage", 
                       json={"chat_id": chat_id, "text": msg})
-    
-    # 增加終極 Debug：印出到底哪些股票被判定過期
-    print(f"總共抓到 {len(stocks)} 筆，篩選後剩餘 {len(still_in)} 筆處置中。")
+    print(f"處理完成：共 {len(stocks)} 筆數據。")
 
 if __name__ == "__main__":
     main()
