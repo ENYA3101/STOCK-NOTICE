@@ -3,7 +3,7 @@ import datetime
 import os
 
 def parse_date(date_str):
-    date_str = date_str.strip()
+    date_str = date_str.strip().replace(" ", "")
     try:
         if '/' in date_str:
             parts = date_str.split('/')
@@ -13,43 +13,68 @@ def parse_date(date_str):
         return None
 
 def main():
-    # ======= 強制模擬區：讓你現在就能看到格式 =======
-    today = datetime.date(2025, 12, 29) # 假裝今天是 12/29
+    # ======= 模擬測試環境 =======
+    # 假裝今天是 2025/12/29
+    today = datetime.date(2025, 12, 29) 
     
-    # 模擬從 API 抓回來的原始資料 (包含你提供的名單)
+    # 模擬 API 原始資料
     mock_data = [
-        {"id": "5475", "name": "德宏", "range": "114/12/12-114/12/28"}, # 12/29 出關
-        {"id": "4542", "name": "科峤", "range": "114/12/16-114/12/30"},
-        {"id": "6443", "name": "元晶", "range": "114/12/17-114/12/31"},
-        {"id": "8358", "name": "金居", "range": "114/12/17-114/12/31"},
-        {"id": "4991", "name": "環宇", "range": "114/12/29-115/01/12"}
+        {
+            "id": "4991", "name": "環宇", 
+            "announce": "114/12/29", # 今天的公告
+            "range": "114/12/30-115/01/12" # 明天開始處置
+        },
+        {
+            "id": "5475", "name": "德宏", 
+            "announce": "114/12/11", 
+            "range": "114/12/12-114/12/28" # 昨天結束，今天出關
+        },
+        {
+            "id": "3081", "name": "聯亞", 
+            "announce": "114/12/22", 
+            "range": "114/12/23-115/01/09" # 處置中
+        }
     ]
-    # =============================================
+    # ==========================
 
+    new_announcement = []
     out_of_jail = []
-    in_disposal = []
+    still_in = []
 
     for s in mock_data:
         dates = s['range'].split('-')
+        announce_date = parse_date(s['announce'])
         end_date = parse_date(dates[1])
         
-        if not end_date: continue
+        if not end_date or not announce_date: continue
         
-        # 定義：出關日是結束日的隔天
         exit_date = end_date + datetime.timedelta(days=1)
         info = f"{s['name']}({s['id']}) {s['range']}"
+        
+        # 判斷邏輯
+        if announce_date == today:
+            new_announcement.append(f"🔔 {info}")
         
         if exit_date == today:
             out_of_jail.append(info)
         elif end_date >= today:
-            in_disposal.append(info)
+            still_in.append(info)
 
     # 組合訊息
-    msg = f"🧪【格式測試報告】\n📅 模擬日期：{today}\n\n"
-    msg += "【本日出關】\n" + ("\n".join(out_of_jail) if out_of_jail else "無") + "\n\n"
-    msg += "【處置中】\n" + ("\n".join(in_disposal) if in_disposal else "無")
+    msg = f"🧪【公告日邏輯測試】\n📅 模擬日期：{today}\n\n"
+    
+    msg += "【🔔 今日新公告進關】\n"
+    msg += "\n".join(new_announcement) if new_announcement else "無"
+    msg += "\n\n"
+    
+    msg += "【本日出關】\n"
+    msg += "\n".join(out_of_jail) if out_of_jail else "無"
+    msg += "\n\n"
+    
+    msg += "【所有處置中明細】\n"
+    msg += "\n".join(still_in) if still_in else "無"
 
-    # 發送 TG
+    # 發送 Telegram
     token = os.getenv("TG_TOKEN")
     chat_id = os.getenv("CHAT_ID")
     if token and chat_id:
