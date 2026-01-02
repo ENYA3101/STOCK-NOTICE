@@ -101,8 +101,6 @@ try:
 except Exception as e:
     print("上櫃抓取失敗:", e)
 
-    return all_stocks
-
 def main():
     today = datetime.date.today()
     stocks = get_real_data()
