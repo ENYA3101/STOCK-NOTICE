@@ -1,6 +1,9 @@
 import requests
 import datetime
 import os
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+}
 
 def parse_date(date_str):
     """強力解析日期：支援 115/01/01 或 20260101"""
@@ -45,7 +48,15 @@ def get_real_data():
     # 2. 抓取上櫃 (TPEx)
     # 欄位順序：公布日期[0], 證券代號[1], 證券名稱[2], 處置起迄時間[3]...
     try:
-        r = requests.get("https://www.tpex.org.tw/web/stock/margin_trading/disposal/disposal_result.php?l=zh-tw", timeout=15)
+r = requests.get(
+    "https://www.tpex.org.tw/web/stock/margin_trading/disposal/disposal_result.php",
+    params={
+        "l": "zh-tw",
+        "response": "json"
+    },
+    headers=HEADERS,
+    timeout=15
+)
         data = r.json().get('aaData', [])
         for i in data:
             if len(i) < 4: continue
