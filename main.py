@@ -62,31 +62,44 @@ def get_real_data():
     except Exception as e:
         print("上市抓取失敗:", e)
 
-    # ---- TPEx 上櫃 ----
-    try:
-        r = requests.get(
-            "https://www.tpex.org.tw/web/stock/margin_trading/disposal/disposal_result.php",
-            params={"l": "zh-tw", "response": "json"},
-            headers=HEADERS,
-            timeout=15
-        )
+# ---- TPEx 上櫃 ----
+try:
+    r = requests.get(
+        "https://www.tpex.org.tw/web/stock/margin_trading/disposal/disposal_result.php",
+        params={"l": "zh-tw", "response": "json"},
+        headers=HEADERS,
+        timeout=15
+    )
+
+    # 🔒 關鍵防爬蟲防呆
+    if not r.text or not r.text.strip().startswith("{"):
+        print("⚠️ 上櫃回傳非 JSON，可能被 TPEx 擋（GitHub Actions 常見）")
+        print(r.text[:200])
+    else:
         json_data = r.json()
-        data = json_data.get('aaData', [])
-        print("📌 上櫃處置股筆數：", len(data))  # <🧪 測試用
+        data = json_data.get("aaData", [])
+        print("📌 上櫃處置股筆數：", len(data))
+
         for i in data:
             if len(i) < 4:
                 continue
+
             start, end = split_period(i[3])
             if not end:
                 continue
+
             all_stocks.append({
-                'id': i[1], 'name': i[2],
+                'id': i[1],
+                'name': i[2],
                 'announce': parse_date(i[0]),
-                'start': start, 'end': end,
-                'range': i[3], 'market': '上櫃'
+                'start': start,
+                'end': end,
+                'range': i[3],
+                'market': '上櫃'
             })
-    except Exception as e:
-        print("上櫃抓取失敗:", e)
+
+except Exception as e:
+    print("上櫃抓取失敗:", e)
 
     return all_stocks
 
