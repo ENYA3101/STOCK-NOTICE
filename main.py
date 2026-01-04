@@ -18,18 +18,20 @@ def parse_date(date_str):
 
 def get_real_data():
     all_stocks = []
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Encoding': 'gzip, deflate' # 告訴伺服器我們可以處理壓縮檔
+    }
     
     # 1. 抓取上市 (TWSE) CSV
     try:
         twse_csv_url = "https://www.twse.com.tw/zh/announcement/punish?response=csv"
         r = requests.get(twse_csv_url, headers=headers, timeout=15)
         if r.status_code == 200:
-            decoded_content = r.content.decode('cp950') # 台灣 CSV 通常是 cp950 編碼
-            cr = csv.reader(io.StringIO(decoded_content))
-            rows = list(cr)
-            for i in rows:
-                # 判斷是否為資料列 (通常代號在第 2 欄，長度為 4~6 位數字)
+            # 自動處理編碼 (上市 CSV 通常是 cp950)
+            content = r.content.decode('cp950', errors='ignore')
+            cr = csv.reader(io.StringIO(content))
+            for i in cr:
                 if len(i) > 6 and i[2].strip().isdigit():
                     period = i[6].split('～') if '～' in i[6] else i[6].split('-')
                     if len(period) >= 2:
@@ -41,19 +43,23 @@ def get_real_data():
                             'range': i[6]
                         })
     except Exception as e:
-        print(f"上市 CSV 抓取失敗: {e}")
+        print(f"上市 CSV 抓取異常: {e}")
 
-    # 2. 抓取上櫃 (TPEx) CSV
+    # 2. 抓取上櫃 (TPEx) CSV - 強化版
     try:
-        # 櫃買中心處置公告 CSV 連結
         tpex_csv_url = "https://www.tpex.org.tw/web/stock/margin_trading/disposal/disposal_result.php?l=zh-tw&o=csv"
         r = requests.get(tpex_csv_url, headers=headers, timeout=15)
+        
         if r.status_code == 200:
-            decoded_content = r.content.decode('cp950')
-            cr = csv.reader(io.StringIO(decoded_content))
-            rows = list(cr)
-            for i in rows:
-                # 櫃買 CSV 格式：[0]公布日期, [1]證券代號, [2]證券名稱, [3]起訖時間
+            # 解決 0x89 錯誤：先嘗試用 utf-8，失敗則用 cp950，並忽略非法字元
+            try:
+                content = r.content.decode('utf-8')
+            except UnicodeDecodeError:
+                content = r.content.decode('cp950', errors='ignore')
+            
+            cr = csv.reader(io.StringIO(content))
+            for i in cr:
+                # 櫃買 CSV 欄位：公布日期[0], 代號[1], 名稱[2], 期間[3]
                 if len(i) > 3 and i[1].strip().isdigit():
                     period = i[3].split('-')
                     if len(period) >= 2:
@@ -64,9 +70,9 @@ def get_real_data():
                             'end': parse_date(period[1]),
                             'range': i[3]
                         })
-            print(f"DEBUG: 櫃買 CSV 成功解析")
+            print(f"DEBUG: 上櫃 CSV 解析成功，目前總筆數: {len(all_stocks)}")
     except Exception as e:
-        print(f"上櫃 CSV 抓取失敗: {e}")
+        print(f"上櫃 CSV 解析失敗: {e}")
     
     return all_stocks
 
