@@ -4,6 +4,7 @@ import os
 import csv
 import io
 import re
+import pytz  # 新增
 
 # ===========================
 # 日期處理工具
@@ -42,11 +43,8 @@ def format_md(d):
 # ===========================
 def get_real_data():
     all_stocks = []
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
+    headers = {"User-Agent": "Mozilla/5.0"}
 
-    # 設定查詢範圍：前後多抓一點，確保抓到剛結束或未來的
     today = datetime.date.today()
     start_str = (today - datetime.timedelta(days=10)).strftime('%Y%m%d')
     end_str = (today + datetime.timedelta(days=30)).strftime('%Y%m%d')
@@ -64,7 +62,6 @@ def get_real_data():
                 s_id = str(row[2]).strip().split('.')[0]
                 s_name = str(row[3]).strip()
                 
-                # 模糊搜尋日期區間
                 raw_range = ""
                 for col in row:
                     if "~" in str(col) or "～" in str(col):
@@ -110,7 +107,9 @@ def get_real_data():
 # 主程式
 # ===========================
 def main():
-    today = datetime.date.today()
+    # ===== 使用台北時區 =====
+    tz = pytz.timezone("Asia/Taipei")
+    today = datetime.datetime.now(tz).date()
     next_day = next_trading_day(today)
 
     raw_stocks = get_real_data()
@@ -122,7 +121,7 @@ def main():
         if key not in unique_stocks or s["end"] > unique_stocks[key]["end"]:
             unique_stocks[key] = s
     
-    # 排序：先上市櫃 -> 再代號
+    # 排序
     stocks = sorted(unique_stocks.values(), key=lambda x: (x["market"], x["id"]))
 
     result = {
@@ -134,14 +133,11 @@ def main():
         if not s["end"]: continue
 
         market = s["market"]
-        
-        # 格式化顯示字串： [代號] 名稱 (MM/DD ~ MM/DD)
-        # 使用全形空格或其他方式讓版面儘量整齊，但Telegram手機版字寬難以完美對齊
         date_range = f"({format_md(s['start'])} ~ {format_md(s['end'])})"
         info = f"`{s['id']}` {s['name']} {date_range}"
 
         enter_date = next_trading_day(s["announce"]) if s["announce"] else s["start"]
-        exit_date  = next_trading_day(s["end"])
+        exit_date  = s["end"]  # 修改：不要加 next_trading_day
 
         if exit_date == today:
             result[market]["today_out"].append(info)
@@ -152,11 +148,9 @@ def main():
         elif enter_date <= today <= s["end"]:
             result[market]["still_in"].append(info)
 
-    # 組合訊息函式
     def build_section(title, items):
         if not items:
             return f"{title}: 無"
-        # 這裡用換行符號 join，實現一行一個
         return f"{title}:\n" + "\n".join(items)
 
     msg = f"📅 日期：{today}\n"
@@ -182,4 +176,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-幫我修改在這個
