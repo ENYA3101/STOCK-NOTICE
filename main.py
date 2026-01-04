@@ -47,7 +47,7 @@ def get_real_data():
     }
 
     # 設定查詢範圍：前後多抓一點，確保抓到剛結束或未來的
-    today = datetime.date.today() - datetime.timedelta(days=1)  # 前一天
+    today = datetime.date.today()
     start_str = (today - datetime.timedelta(days=10)).strftime('%Y%m%d')
     end_str = (today + datetime.timedelta(days=30)).strftime('%Y%m%d')
 
@@ -110,8 +110,7 @@ def get_real_data():
 # 主程式
 # ===========================
 def main():
-    # 使用前一天作為資料日期
-    today = datetime.date.today() - datetime.timedelta(days=1)
+    today = datetime.date.today()
     next_day = next_trading_day(today)
 
     raw_stocks = get_real_data()
@@ -135,12 +134,14 @@ def main():
         if not s["end"]: continue
 
         market = s["market"]
+        
+        # 格式化顯示字串： [代號] 名稱 (MM/DD ~ MM/DD)
+        # 使用全形空格或其他方式讓版面儘量整齊，但Telegram手機版字寬難以完美對齊
         date_range = f"({format_md(s['start'])} ~ {format_md(s['end'])})"
         info = f"`{s['id']}` {s['name']} {date_range}"
 
-        # 修正日期判斷，不再多加一天
-        enter_date = s["start"]
-        exit_date  = s["end"]
+        enter_date = next_trading_day(s["announce"]) if s["announce"] else s["start"]
+        exit_date  = next_trading_day(s["end"])
 
         if exit_date == today:
             result[market]["today_out"].append(info)
@@ -148,13 +149,14 @@ def main():
             result[market]["tomorrow_out"].append(info)
         elif enter_date == today:
             result[market]["today_in"].append(info)
-        elif enter_date <= today <= exit_date:
+        elif enter_date <= today <= s["end"]:
             result[market]["still_in"].append(info)
 
     # 組合訊息函式
     def build_section(title, items):
         if not items:
             return f"{title}: 無"
+        # 這裡用換行符號 join，實現一行一個
         return f"{title}:\n" + "\n".join(items)
 
     msg = f"📅 日期：{today}\n"
@@ -170,7 +172,6 @@ def main():
 
     print(msg)
 
-    # 發送 Telegram
     token = os.getenv("TG_TOKEN")
     chat_id = os.getenv("CHAT_ID")
     if token and chat_id:
@@ -181,3 +182,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+幫我修改在這個
