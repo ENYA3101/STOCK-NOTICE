@@ -227,8 +227,8 @@ def main():
 
     for market in ["上市", "上櫃"]:
         msg += f"🟥【{market}】\n"
-        msg += build_section("🔓 今日出關 (恢復交易)", result[market]["today_out"]) + "\n\n"
-        msg += build_section("⏭️ 明日出關 (處置最後一天)", result[market]["tomorrow_out"]) + "\n\n"
+        msg += build_section("🔓 今日出關", result[market]["today_out"]) + "\n\n"
+        msg += build_section("⏭️ 明日出關", result[market]["tomorrow_out"]) + "\n\n"
         msg += build_section("🔔 今日進關", result[market]["today_in"]) + "\n\n"
         msg += build_section("⏳ 處置中", result[market]["still_in"]) + "\n\n"
         msg += "--------------------\n"
