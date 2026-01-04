@@ -94,7 +94,7 @@ def get_real_data():
     return list(all_stocks.values())
 
 def main():
-    today = datetime.date.today(2026, 1, 2)
+    today = datetime.date(2026, 1, 2)
     # 測試用：若今天要看 1/5 的報表，可手動設定 today = datetime.date(2026, 1, 5)
     
     stocks = get_real_data()
