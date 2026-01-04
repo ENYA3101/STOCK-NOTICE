@@ -1,10 +1,13 @@
 import requests
 import datetime
 import os
+import json
 
-# 設定 Header 模擬瀏覽器，防止被櫃買中心擋掉
+# 更換模擬瀏覽器的 Header，使用更通用的設定
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/javascript, */*; q=0.01',
+    'Referer': 'https://www.tpex.org.tw/zh-tw/announce/market/disposal.html'
 }
 
 def parse_date(date_str):
@@ -41,24 +44,29 @@ def get_real_data():
     except Exception as e:
         print(f"上市抓取失敗: {e}")
 
-    # 2. 抓取上櫃 (TPEx) - 加入 HEADERS 並修正索引
+    # 2. 抓取上櫃 (TPEx) - 修正路徑與解析邏輯
     try:
-        # 換成更直接的 JSON 資料接口
+        # 使用這個更穩定的 API 路徑
         tpex_url = "https://www.tpex.org.tw/web/stock/margin_trading/disposal/disposal_result.php?l=zh-tw"
         r = requests.get(tpex_url, headers=HEADERS, timeout=15)
+        r.encoding = 'utf-8' # 強制編碼避免亂碼
         
-        # 檢查是否成功抓取到 JSON
-        data_json = r.json()
+        # 檢查是否為 JSON，若不是則跳過
+        try:
+            data_json = r.json()
+        except:
+            print(f"上櫃 API 回傳內容非 JSON (可能是維護中)")
+            return all_stocks
+
         items = data_json.get('aaData', [])
-        
-        print(f"DEBUG: 櫃買中心 API 回傳 {len(items)} 筆原始資料")
+        print(f"DEBUG: 櫃買中心 API 成功回傳 {len(items)} 筆原始資料")
 
         for i in items:
-            # i[0]:公告日期, i[1]:代號, i[2]:名稱, i[3]:處置期間
+            # 根據你提供的表格內容：公布日期[0], 證券代號[1], 證券名稱[2], 起訖時間[3]
             if len(i) < 4: continue
             
-            # 解析上櫃的期間格式： "114/12/29-115/01/12"
             raw_range = i[3]
+            # 櫃買中心有時日期中間沒空格，需謹慎分割
             period = raw_range.split('-')
             
             if len(period) >= 2:
@@ -71,12 +79,11 @@ def get_real_data():
                     'range': raw_range
                 })
     except Exception as e:
-        print(f"上櫃抓取失敗: {e}")
+        print(f"上櫃連線異常: {e}")
     
     return all_stocks
 
 def main():
-    # 為了測試今天 1/4 的情況，如果 API 還有資料，這會抓得到
     today = datetime.date.today()
     stocks = get_real_data()
     
@@ -90,13 +97,17 @@ def main():
         exit_day = s['end'] + datetime.timedelta(days=1)
         info = f"{s['name']}({s['id']}) 期間：{s['range']}"
         
+        # A. 出關日 (結束日+1 = 今天)
         if exit_day == today:
             out_of_jail.append(info)
+        
+        # B. 今日新公告 (公告日 = 今天)
         elif s['announce'] == today:
             new_announcement.append(f"🔔 {info}")
         
-        # 修正：只要今天還在處置結束日(含)之前，就算處置中
+        # C. 正在處置中 (含今天)
         if s['end'] >= today:
+            # 排除已列入今日新公告的
             if not any(s['id'] in x for x in new_announcement):
                 still_in.append(info)
 
