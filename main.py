@@ -95,42 +95,79 @@ def get_real_data():
 
 def main():
     today = datetime.date.today()
-    # 測試用：若今天要看 1/5 的報表，可手動設定 today = datetime.date(2026, 1, 5)
-    
-    stocks = get_real_data()
-    new_ann, out_jail, still_in = [], [], []
-    processed_ids = set()
+    # today = datetime.date(2026, 1, 4)  # 測試用
 
-    # 排序：按市場與代號
+    stocks = get_real_data()
+
+    result = {
+        "上市": {
+            "today_out": [],
+            "tomorrow_out": [],
+            "today_in": [],
+            "still_in": []
+        },
+        "上櫃": {
+            "today_out": [],
+            "tomorrow_out": [],
+            "today_in": [],
+            "still_in": []
+        }
+    }
+
     stocks.sort(key=lambda x: (x['market'], x['id']))
 
     for s in stocks:
-        if not s["end"]: continue
-        
-        info = f"[{s['market']}] {s['name']}({s['id']}) 期間：{s['range']}"
-        
-        # 1. 今日新公告
-        if s["announce"] == today:
-            new_ann.append(f"🔔 {info}")
-            processed_ids.add(s["id"])
+        if not s["announce"] or not s["end"]:
+            continue
 
-        # 2. 本日出關 (迄日的隔天)
-        exit_day = s["end"] + datetime.timedelta(days=1)
-        if exit_day == today:
-            out_jail.append(f"🔓 {info}")
+        market = s["market"]
+        info = f"{s['name']}({s['id']}) 期間：{s['range']}"
 
-        # 3. 處置中 (且不是今天才剛公告的)
-        if s["start"] <= today <= s["end"] and s["id"] not in processed_ids:
-            still_in.append(f"⏳ {info}")
+        enter_date = s["announce"] + datetime.timedelta(days=1)
+        exit_date  = s["end"] + datetime.timedelta(days=1)
 
-    msg = (
-        f"📅 報表日期：{today}\n\n"
-        "【🔔 今日新公告進關】\n" + ("\n".join(new_ann) if new_ann else "無") + "\n\n"
-        "【🔓 本日出關股票】\n" + ("\n".join(out_jail) if out_jail else "無") + "\n\n"
-        "【⏳ 其他處置中明細】\n" + ("\n".join(still_in) if still_in else "無")
-    )
+        # 1️⃣ 今日出關
+        if exit_date == today:
+            result[market]["today_out"].append(f"🔓 {info}")
+            continue
 
-    print(msg) # 終端機預覽
+        # 2️⃣ 明日出關（含週末特例）
+        if (
+            exit_date == today + datetime.timedelta(days=1)
+            or (
+                s["end"].weekday() == 4      # 星期五
+                and today.weekday() == 6     # 星期日
+            )
+        ):
+            result[market]["tomorrow_out"].append(f"⏭️ {info}")
+            continue
+
+        # 3️⃣ 今日被關（真正進關日）
+        if enter_date == today:
+            result[market]["today_in"].append(f"🔔 {info}")
+            continue
+
+        # 4️⃣ 還在處置中
+        if enter_date < today <= s["end"]:
+            result[market]["still_in"].append(f"⏳ {info}")
+            continue
+
+    # ===== 組訊息 =====
+    def block(title, items):
+        return f"【{title}】\n" + ("\n".join(items) if items else "無")
+
+    msg = f"📅 報表日期：{today}\n\n"
+
+    for market in ["上市", "上櫃"]:
+        msg += (
+            f"🟥 {market}\n"
+            + block("🔓 今日出關", result[market]["today_out"]) + "\n\n"
+            + block("⏭️ 明日出關", result[market]["tomorrow_out"]) + "\n\n"
+            + block("🔔 今日被關", result[market]["today_in"]) + "\n\n"
+            + block("⏳ 還在處置", result[market]["still_in"]) + "\n\n"
+        )
+
+    print(msg)
 
     # Telegram 發送
     token = os.getenv("TG_TOKEN")
