@@ -31,9 +31,7 @@ def split_period(raw):
 
 def get_real_data():
     all_stocks = {}
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
+    headers = {"User-Agent": "Mozilla/5.0"}
 
     # =====================
     # 1. TWSE（上市）
@@ -44,22 +42,22 @@ def get_real_data():
         data = r.json()
 
         for row in data:
-            # 欄位名稱以實際 open_data 為準
-            s_id = row.get("StockNo", "").strip()
+            s_id = row.get("證券代號", "").strip()
             if not s_id.isdigit():
                 continue
 
-            period = split_period(row.get("PunishDate", ""))
+            period = split_period(row.get("處置期間", ""))
             if not period:
                 continue
 
             all_stocks[s_id] = {
                 "id": s_id,
-                "name": row.get("StockName", "").strip(),
-                "announce": parse_date(row.get("AnnounceDate")),
+                "name": row.get("證券名稱", "").strip(),
+                "announce": parse_date(row.get("公布日期")),
                 "start": parse_date(period[0]),
                 "end": parse_date(period[1]),
-                "range": row.get("PunishDate", "").strip(),
+                "range": row.get("處置期間", "").strip(),
+                "market": "上市"
             }
     except Exception as e:
         print("TWSE error:", e)
@@ -93,6 +91,7 @@ def get_real_data():
                 "start": parse_date(period[0]),
                 "end": parse_date(period[1]),
                 "range": row[3].strip(),
+                "market": "上櫃"
             }
     except Exception as e:
         print("TPEx error:", e)
@@ -111,7 +110,7 @@ def main():
             continue
 
         exit_day = s["end"] + datetime.timedelta(days=1)
-        info = f"{s['name']}({s['id']}) 期間：{s['range']}"
+        info = f"[{s['market']}] {s['name']}({s['id']}) 期間：{s['range']}"
 
         if s["announce"] == today:
             new_ann.append(f"🔔 {info}")
@@ -140,7 +139,7 @@ def main():
             json={"chat_id": chat_id, "text": msg}
         )
 
-    print(f"完成！共彙整 {len(stocks)} 筆資料。")
+    print(f"完成！共彙整 {len(stocks)} 筆（上市＋上櫃）資料。")
 
 
 if __name__ == "__main__":
