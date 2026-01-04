@@ -5,83 +5,72 @@ import csv
 import io
 import re
 
-
 def parse_date(date_str):
     if not date_str:
         return None
+    # 移除所有非數字字元
     s = "".join(filter(str.isdigit, str(date_str)))
     try:
-        if len(s) == 7:  # 民國
+        if len(s) == 7:  # 民國 1120101
             return datetime.date(int(s[:3]) + 1911, int(s[3:5]), int(s[5:]))
-        elif len(s) == 8:  # 西元
+        elif len(s) == 8:  # 西元 20230101
             return datetime.date(int(s[:4]), int(s[4:6]), int(s[6:]))
     except:
         return None
     return None
 
-
 def split_period(raw):
     if not raw:
         return None
+    # 支援多種分隔符號
     parts = re.split(r"[~～\-]", raw.replace(" ", ""))
     if len(parts) >= 2:
         return parts[0], parts[1]
     return None
 
-
 def get_real_data():
     all_stocks = {}
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
 
     # =====================
-    # 1. TWSE（上市）
+    # 1. TWSE（上市）- 改用官方 JSON API
     # =====================
     try:
-        url = "https://www.twse.com.tw/announcement/punish?response=open_data"
+        # 這是證交所「處置股票」的正式資料介面
+        url = "https://www.twse.com.tw/announcement/punish?response=json"
         r = requests.get(url, headers=headers, timeout=10)
-        data = r.json()
+        data_json = r.json()
 
-        for row in data:
-            # 防呆抓欄位（避免表格微調）
-            s_id = (
-                row.get("證券代號")
-                or row.get("股票代號")
-                or ""
-            ).strip()
+        # 證交所 API 資料放在 'data' 欄位中
+        if "data" in data_json:
+            for row in data_json["data"]:
+                # row 格式通常為: [公布日期, 證券代號, 證券名稱, 處置期間, 處置內容...]
+                if len(row) < 4:
+                    continue
+                
+                s_id = row[1].strip()
+                if not s_id.isdigit():
+                    continue
 
-            if not s_id.isdigit():
-                continue
+                raw_range = row[3].strip()
+                period = split_period(raw_range)
+                if not period:
+                    continue
 
-            raw_range = (
-                row.get("處置期間")
-                or row.get("處置區間")
-                or ""
-            ).strip()
-
-            period = split_period(raw_range)
-            if not period:
-                continue
-
-            all_stocks[s_id] = {
-                "id": s_id,
-                "name": (
-                    row.get("證券名稱")
-                    or row.get("股票名稱")
-                    or ""
-                ).strip(),
-                "announce": parse_date(
-                    row.get("公布日期") or row.get("公告日期")
-                ),
-                "start": parse_date(period[0]),
-                "end": parse_date(period[1]),
-                "range": raw_range,
-                "market": "上市",
-            }
+                all_stocks[s_id] = {
+                    "id": s_id,
+                    "name": row[2].strip(),
+                    "announce": parse_date(row[0]),
+                    "start": parse_date(period[0]),
+                    "end": parse_date(period[1]),
+                    "range": raw_range,
+                    "market": "上市",
+                }
     except Exception as e:
         print("TWSE error:", e)
 
     # =====================
-    # 2. TPEx（上櫃）
+    # 2. TPEx（上櫃）- 保持原樣 (CSV 格式)
     # =====================
     try:
         url = (
@@ -93,7 +82,7 @@ def get_real_data():
         content = r.content.decode("utf-8-sig", errors="ignore")
 
         reader = csv.reader(io.StringIO(content))
-        header = next(reader, None)
+        next(reader, None) # 跳過表頭
 
         for row in reader:
             if len(row) < 4:
@@ -120,6 +109,9 @@ def get_real_data():
     except Exception as e:
         print("TPEx error:", e)
 
+    return list(all_stocks.values())
+
+# main 函式保持不變...
     return list(all_stocks.values())
 
 
