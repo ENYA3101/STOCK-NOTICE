@@ -47,7 +47,7 @@ def get_real_data():
     }
 
     # 設定查詢範圍：前後多抓一點，確保抓到剛結束或未來的
-    today = datetime.date.today()
+    today = datetime.date.today() - datetime.timedelta(days=1)  # 前一天
     start_str = (today - datetime.timedelta(days=10)).strftime('%Y%m%d')
     end_str = (today + datetime.timedelta(days=30)).strftime('%Y%m%d')
 
@@ -110,7 +110,8 @@ def get_real_data():
 # 主程式
 # ===========================
 def main():
-    today = datetime.date.today()
+    # 使用前一天作為資料日期
+    today = datetime.date.today() - datetime.timedelta(days=1)
     next_day = next_trading_day(today)
 
     raw_stocks = get_real_data()
@@ -137,7 +138,7 @@ def main():
         date_range = f"({format_md(s['start'])} ~ {format_md(s['end'])})"
         info = f"`{s['id']}` {s['name']} {date_range}"
 
-        # --- 修正日期判斷 ---
+        # 修正日期判斷，不再多加一天
         enter_date = s["start"]
         exit_date  = s["end"]
 
