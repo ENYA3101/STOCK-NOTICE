@@ -134,14 +134,12 @@ def main():
         if not s["end"]: continue
 
         market = s["market"]
-        
-        # 格式化顯示字串： [代號] 名稱 (MM/DD ~ MM/DD)
-        # 使用全形空格或其他方式讓版面儘量整齊，但Telegram手機版字寬難以完美對齊
         date_range = f"({format_md(s['start'])} ~ {format_md(s['end'])})"
         info = f"`{s['id']}` {s['name']} {date_range}"
 
-        enter_date = next_trading_day(s["announce"]) if s["announce"] else s["start"]
-        exit_date  = next_trading_day(s["end"])
+        # --- 修正日期判斷 ---
+        enter_date = s["start"]
+        exit_date  = s["end"]
 
         if exit_date == today:
             result[market]["today_out"].append(info)
@@ -149,14 +147,13 @@ def main():
             result[market]["tomorrow_out"].append(info)
         elif enter_date == today:
             result[market]["today_in"].append(info)
-        elif enter_date <= today <= s["end"]:
+        elif enter_date <= today <= exit_date:
             result[market]["still_in"].append(info)
 
     # 組合訊息函式
     def build_section(title, items):
         if not items:
             return f"{title}: 無"
-        # 這裡用換行符號 join，實現一行一個
         return f"{title}:\n" + "\n".join(items)
 
     msg = f"📅 日期：{today}\n"
@@ -172,6 +169,7 @@ def main():
 
     print(msg)
 
+    # 發送 Telegram
     token = os.getenv("TG_TOKEN")
     chat_id = os.getenv("CHAT_ID")
     if token and chat_id:
