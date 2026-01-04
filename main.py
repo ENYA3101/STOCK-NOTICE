@@ -93,28 +93,33 @@ def get_real_data():
 
     return list(all_stocks.values())
 
+def next_trading_day(d):
+    # 星期五 → 下週一
+    if d.weekday() == 4:
+        return d + datetime.timedelta(days=3)
+    # 星期六 → 下週一
+    if d.weekday() == 5:
+        return d + datetime.timedelta(days=2)
+    # 星期日 → 星期一
+    if d.weekday() == 6:
+        return d + datetime.timedelta(days=1)
+    # 其他 → 隔天
+    return d + datetime.timedelta(days=1)
+
+
 def main():
     today = datetime.date.today()
-    # today = datetime.date(2026, 1, 4)  # 測試用
+    # today = datetime.date(2026, 1, 4)  # 測試用（星期日）
 
     stocks = get_real_data()
+    next_day = next_trading_day(today)
 
     result = {
-        "上市": {
-            "today_out": [],
-            "tomorrow_out": [],
-            "today_in": [],
-            "still_in": []
-        },
-        "上櫃": {
-            "today_out": [],
-            "tomorrow_out": [],
-            "today_in": [],
-            "still_in": []
-        }
+        "上市": {"today_out": [], "tomorrow_out": [], "today_in": [], "still_in": []},
+        "上櫃": {"today_out": [], "tomorrow_out": [], "today_in": [], "still_in": []},
     }
 
-    stocks.sort(key=lambda x: (x['market'], x['id']))
+    stocks.sort(key=lambda x: (x["market"], x["id"]))
 
     for s in stocks:
         if not s["announce"] or not s["end"]:
@@ -123,36 +128,29 @@ def main():
         market = s["market"]
         info = f"{s['name']}({s['id']}) 期間：{s['range']}"
 
-        enter_date = s["announce"] + datetime.timedelta(days=1)
-        exit_date  = s["end"] + datetime.timedelta(days=1)
+        enter_date = next_trading_day(s["announce"])  # 真正進關日
+        exit_date  = next_trading_day(s["end"])       # 真正出關日
 
-        # 1️⃣ 今日出關
+        # 🔓 今日出關
         if exit_date == today:
             result[market]["today_out"].append(f"🔓 {info}")
             continue
 
-        # 2️⃣ 明日出關（含週末特例）
-        if (
-            exit_date == today + datetime.timedelta(days=1)
-            or (
-                s["end"].weekday() == 4      # 星期五
-                and today.weekday() == 6     # 星期日
-            )
-        ):
+        # ⏭️ 明日出關（下個交易日）
+        if exit_date == next_day:
             result[market]["tomorrow_out"].append(f"⏭️ {info}")
             continue
 
-        # 3️⃣ 今日被關（真正進關日）
+        # 🔔 今日被關（真正進關）
         if enter_date == today:
             result[market]["today_in"].append(f"🔔 {info}")
             continue
 
-        # 4️⃣ 還在處置中
+        # ⏳ 還在處置中
         if enter_date < today <= s["end"]:
             result[market]["still_in"].append(f"⏳ {info}")
             continue
 
-    # ===== 組訊息 =====
     def block(title, items):
         return f"【{title}】\n" + ("\n".join(items) if items else "無")
 
@@ -169,14 +167,13 @@ def main():
 
     print(msg)
 
-    # Telegram 發送
     token = os.getenv("TG_TOKEN")
     chat_id = os.getenv("CHAT_ID")
     if token and chat_id:
         requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
             json={"chat_id": chat_id, "text": msg}
-        )
+        ))
 
 if __name__ == "__main__":
     main()
