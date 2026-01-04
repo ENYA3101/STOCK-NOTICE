@@ -3,8 +3,10 @@ import datetime
 import os
 import csv
 import io
+import time
 
 def parse_date(date_str):
+    """強力解析：支援 115/01/01、2026/01/01 或 20260101"""
     if not date_str: return None
     s = "".join(filter(str.isdigit, str(date_str)))
     try:
@@ -17,75 +19,76 @@ def parse_date(date_str):
         return None
 
 def get_real_data():
-    all_stocks = []
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept-Encoding': 'gzip, deflate' # 告訴伺服器我們可以處理壓縮檔
-    }
-    
-    # 1. 抓取上市 (TWSE) CSV
-    try:
-        twse_csv_url = "https://www.twse.com.tw/zh/announcement/punish?response=csv"
-        r = requests.get(twse_csv_url, headers=headers, timeout=15)
-        if r.status_code == 200:
-            # 自動處理編碼 (上市 CSV 通常是 cp950)
-            content = r.content.decode('cp950', errors='ignore')
-            cr = csv.reader(io.StringIO(content))
-            for i in cr:
-                if len(i) > 6 and i[2].strip().isdigit():
-                    period = i[6].split('～') if '～' in i[6] else i[6].split('-')
-                    if len(period) >= 2:
-                        all_stocks.append({
-                            'id': i[2], 'name': i[3], 
-                            'announce': parse_date(i[1]),
-                            'start': parse_date(period[0]),
-                            'end': parse_date(period[1]),
-                            'range': i[6]
-                        })
-    except Exception as e:
-        print(f"上市 CSV 抓取異常: {e}")
+    all_stocks = {} # 使用字典避免重複
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+    today = datetime.date.today()
 
-    # 2. 抓取上櫃 (TPEx) CSV - 強化版
+    # 1. 抓取上市 (TWSE) - 回溯 5 天確保資料完整
+    for i in range(5):
+        target_date = (today - datetime.timedelta(days=i)).strftime("%Y%m%d")
+        try:
+            url = f"https://www.twse.com.tw/zh/announcement/punish?response=csv&date={target_date}"
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code == 200 and len(r.content) > 100:
+                # 使用 utf-8-sig 處理可能的 BOM 頭，若失敗則用 cp950
+                try:
+                    content = r.content.decode('utf-8-sig')
+                except:
+                    content = r.content.decode('cp950', errors='ignore')
+                
+                cr = csv.reader(io.StringIO(content))
+                for row in cr:
+                    # 上市欄位索引：[1]公布日, [2]代號, [3]名稱, [6]起迄時間
+                    if len(row) > 6 and row[2].strip().isdigit():
+                        raw_range = row[6]
+                        period = raw_range.split('～') if '～' in raw_range else raw_range.split('-')
+                        if len(period) >= 2:
+                            s_id = row[2].strip()
+                            all_stocks[s_id] = {
+                                'id': s_id, 'name': row[3].strip(),
+                                'announce': parse_date(row[1]),
+                                'start': parse_date(period[0]), 'end': parse_date(period[1]),
+                                'range': raw_range
+                            }
+        except: pass
+
+    # 2. 抓取上櫃 (TPEx)
     try:
-        tpex_csv_url = "https://www.tpex.org.tw/web/stock/margin_trading/disposal/disposal_result.php?l=zh-tw&o=csv"
-        r = requests.get(tpex_csv_url, headers=headers, timeout=15)
-        
+        url = "https://www.tpex.org.tw/web/stock/margin_trading/disposal/disposal_result.php?l=zh-tw&o=csv"
+        r = requests.get(url, headers=headers, timeout=10)
         if r.status_code == 200:
-            # 解決 0x89 錯誤：先嘗試用 utf-8，失敗則用 cp950，並忽略非法字元
             try:
-                content = r.content.decode('utf-8')
-            except UnicodeDecodeError:
+                content = r.content.decode('utf-8-sig')
+            except:
                 content = r.content.decode('cp950', errors='ignore')
             
             cr = csv.reader(io.StringIO(content))
-            for i in cr:
-                # 櫃買 CSV 欄位：公布日期[0], 代號[1], 名稱[2], 期間[3]
-                if len(i) > 3 and i[1].strip().isdigit():
-                    period = i[3].split('-')
+            for row in cr:
+                # 上櫃欄位索引：[1]公布日, [2]代號, [3]名稱, [4]起迄時間
+                if len(row) > 4 and row[2].strip().isdigit():
+                    raw_range = row[4]
+                    period = raw_range.split('~') if '~' in raw_range else raw_range.split('-')
                     if len(period) >= 2:
-                        all_stocks.append({
-                            'id': i[1], 'name': i[2], 
-                            'announce': parse_date(i[0]),
-                            'start': parse_date(period[0]),
-                            'end': parse_date(period[1]),
-                            'range': i[3]
-                        })
-            print(f"DEBUG: 上櫃 CSV 解析成功，目前總筆數: {len(all_stocks)}")
-    except Exception as e:
-        print(f"上櫃 CSV 解析失敗: {e}")
+                        s_id = row[2].strip()
+                        all_stocks[s_id] = {
+                            'id': s_id, 'name': row[3].strip(),
+                            'announce': parse_date(row[1]),
+                            'start': parse_date(period[0]), 'end': parse_date(period[1]),
+                            'range': raw_range
+                        }
+    except: pass
     
-    return all_stocks
+    return list(all_stocks.values())
 
 def main():
     today = datetime.date.today()
     stocks = get_real_data()
     
-    new_ann = [] # 今日新公告
-    out_jail = [] # 今日出關
-    still_in = [] # 處置中
+    new_ann, out_jail, still_in = [], [], []
 
     for s in stocks:
         if not s['end']: continue
+        
         exit_day = s['end'] + datetime.timedelta(days=1)
         info = f"{s['name']}({s['id']}) 期間：{s['range']}"
         
@@ -93,12 +96,13 @@ def main():
         if exit_day == today:
             out_jail.append(info)
         
-        # B. 今日新公告 (公告日 = 今天)
-        elif s['announce'] == today:
+        # B. 今日新公告進關 (公告日 = 今天)
+        if s['announce'] == today:
             new_ann.append(f"🔔 {info}")
         
-        # C. 正在處置中 (只要結束日大於等於今天)
+        # C. 所有處置中明細 (結束日 >= 今天)
         if s['end'] >= today:
+            # 排除已列在今日新公告的，避免重複
             if not any(s['id'] in x for x in new_ann):
                 still_in.append(info)
 
@@ -106,13 +110,13 @@ def main():
     msg = f"📅 報表日期：{today}\n\n"
     msg += "【🔔 今日新公告進關】\n" + ("\n".join(new_ann) if new_ann else "無") + "\n\n"
     msg += "【🔓 本日出關股票】\n" + ("\n".join(out_jail) if out_jail else "無") + "\n\n"
-    msg += "【⏳ 正在處置中明細】\n" + ("\n".join(still_in) if still_in else "無")
+    msg += "【⏳ 所有處置中明細】\n" + ("\n".join(still_in) if still_in else "無")
 
     token = os.getenv("TG_TOKEN")
     chat_id = os.getenv("CHAT_ID")
     if token and chat_id:
         requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat_id, "text": msg})
-    print(f"任務完成：共處理 {len(stocks)} 筆數據。")
+    print(f"處理完成，共彙整 {len(stocks)} 筆資料。")
 
 if __name__ == "__main__":
     main()
