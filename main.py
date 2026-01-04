@@ -30,44 +30,50 @@ def split_period(raw):
 
 def get_real_data():
     all_stocks = {}
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/91.0.4472.124 Safari/537.36"
+    }
 
     # =====================
-    # 1. TWSE（上市）- 改用官方 JSON API
+    # 1. TWSE（上市）
     # =====================
+    twse_url = "https://www.twse.com.tw/rwd/zh/announcement/punish?response=json"
     try:
-        # 這是證交所「處置股票」的正式資料介面
-        url = "https://www.twse.com.tw/announcement/punish?response=json"
-        r = requests.get(url, headers=headers, timeout=10)
-        data_json = r.json()
+        r = requests.get(twse_url, headers=headers, timeout=15)
+        if r.status_code == 200:
+            json_data = r.json()
+            rows = json_data.get("data", [])
 
-        # 證交所 API 資料放在 'data' 欄位中
-        if "data" in data_json:
-            for row in data_json["data"]:
-                # row 格式通常為: [公布日期, 證券代號, 證券名稱, 處置期間, 處置內容...]
-                if len(row) < 4:
+            for row in rows:
+                # 欄位：0 公告日, 1 代號, 2 名稱, 3 起日, 4 迄日
+                if len(row) < 5:
                     continue
-                
-                s_id = row[1].strip()
+
+                s_id = str(row[1]).strip()
                 if not s_id.isdigit():
                     continue
 
-                raw_range = row[3].strip()
-                period = split_period(raw_range)
-                if not period:
+                start_d = str(row[3])
+                end_d = str(row[4])
+
+                start_date = parse_date(start_d)
+                end_date = parse_date(end_d)
+                if not start_date or not end_date:
                     continue
 
                 all_stocks[s_id] = {
                     "id": s_id,
-                    "name": row[2].strip(),
+                    "name": str(row[2]).strip(),
                     "announce": parse_date(row[0]),
-                    "start": parse_date(period[0]),
-                    "end": parse_date(period[1]),
-                    "range": raw_range,
+                    "start": start_date,
+                    "end": end_date,
+                    "range": f"{start_d}~{end_d}",
                     "market": "上市",
                 }
     except Exception as e:
-        print("TWSE error:", e)
+        print(f"證交所抓取錯誤: {e}")
 
     # =====================
     # 2. TPEx（上櫃）- 保持原樣 (CSV 格式)
