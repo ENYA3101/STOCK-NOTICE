@@ -1,15 +1,8 @@
 import requests
 import datetime
 import os
-
-# 模擬極度真實的瀏覽器行為
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'application/json, text/javascript, */*; q=0.01',
-    'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
-    'Referer': 'https://www.tpex.org.tw/',
-    'Connection': 'keep-alive'
-}
+import csv
+import io
 
 def parse_date(date_str):
     if not date_str: return None
@@ -25,55 +18,55 @@ def parse_date(date_str):
 
 def get_real_data():
     all_stocks = []
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
     
-    # 1. 抓取上市 (TWSE)
+    # 1. 抓取上市 (TWSE) CSV
     try:
-        r = requests.get("https://www.twse.com.tw/rwd/zh/announcement/punish?response=json", timeout=15)
-        items = r.json().get('data', [])
-        for i in items:
-            if len(i) < 7: continue
-            raw_time = i[6]
-            period = raw_time.split('～') if '～' in raw_time else raw_time.split('-')
-            if len(period) >= 2:
-                all_stocks.append({
-                    'id': i[2], 'name': i[3], 
-                    'announce': parse_date(i[1]),
-                    'start': parse_date(period[0]),
-                    'end': parse_date(period[1]),
-                    'range': raw_time
-                })
-    except: pass
-
-    # 2. 抓取上櫃 (TPEx) - 使用備用資料網址並強化連線
-    try:
-        # 使用櫃買中心另一組 API 介面
-        tpex_url = "https://www.tpex.org.tw/web/stock/margin_trading/disposal/disposal_result.php?l=zh-tw"
-        session = requests.Session() # 使用 Session 保持連線狀態
-        r = session.get(tpex_url, headers=HEADERS, timeout=15)
-        
-        # 如果回傳狀態不是 200，就印出錯誤
-        if r.status_code != 200:
-            print(f"櫃買中心回傳狀態碼錯誤: {r.status_code}")
-            return all_stocks
-
-        data_json = r.json()
-        items = data_json.get('aaData', [])
-        
-        for i in items:
-            # i[0]:公布日期, i[1]:代號, i[2]:名稱, i[3]:處置期間
-            if len(i) < 4: continue
-            period = i[3].split('-')
-            if len(period) >= 2:
-                all_stocks.append({
-                    'id': i[1], 'name': i[2], 
-                    'announce': parse_date(i[0]),
-                    'start': parse_date(period[0]),
-                    'end': parse_date(period[1]),
-                    'range': i[3]
-                })
-        print(f"成功抓取上櫃資料：{len(items)} 筆")
+        twse_csv_url = "https://www.twse.com.tw/zh/announcement/punish?response=csv"
+        r = requests.get(twse_csv_url, headers=headers, timeout=15)
+        if r.status_code == 200:
+            decoded_content = r.content.decode('cp950') # 台灣 CSV 通常是 cp950 編碼
+            cr = csv.reader(io.StringIO(decoded_content))
+            rows = list(cr)
+            for i in rows:
+                # 判斷是否為資料列 (通常代號在第 2 欄，長度為 4~6 位數字)
+                if len(i) > 6 and i[2].strip().isdigit():
+                    period = i[6].split('～') if '～' in i[6] else i[6].split('-')
+                    if len(period) >= 2:
+                        all_stocks.append({
+                            'id': i[2], 'name': i[3], 
+                            'announce': parse_date(i[1]),
+                            'start': parse_date(period[0]),
+                            'end': parse_date(period[1]),
+                            'range': i[6]
+                        })
     except Exception as e:
-        print(f"上櫃連線依舊失敗: {e}")
+        print(f"上市 CSV 抓取失敗: {e}")
+
+    # 2. 抓取上櫃 (TPEx) CSV
+    try:
+        # 櫃買中心處置公告 CSV 連結
+        tpex_csv_url = "https://www.tpex.org.tw/web/stock/margin_trading/disposal/disposal_result.php?l=zh-tw&o=csv"
+        r = requests.get(tpex_csv_url, headers=headers, timeout=15)
+        if r.status_code == 200:
+            decoded_content = r.content.decode('cp950')
+            cr = csv.reader(io.StringIO(decoded_content))
+            rows = list(cr)
+            for i in rows:
+                # 櫃買 CSV 格式：[0]公布日期, [1]證券代號, [2]證券名稱, [3]起訖時間
+                if len(i) > 3 and i[1].strip().isdigit():
+                    period = i[3].split('-')
+                    if len(period) >= 2:
+                        all_stocks.append({
+                            'id': i[1], 'name': i[2], 
+                            'announce': parse_date(i[0]),
+                            'start': parse_date(period[0]),
+                            'end': parse_date(period[1]),
+                            'range': i[3]
+                        })
+            print(f"DEBUG: 櫃買 CSV 成功解析")
+    except Exception as e:
+        print(f"上櫃 CSV 抓取失敗: {e}")
     
     return all_stocks
 
@@ -81,24 +74,29 @@ def main():
     today = datetime.date.today()
     stocks = get_real_data()
     
-    new_ann = [] 
-    out_jail = []      
-    still_in = []         
+    new_ann = [] # 今日新公告
+    out_jail = [] # 今日出關
+    still_in = [] # 處置中
 
     for s in stocks:
         if not s['end']: continue
         exit_day = s['end'] + datetime.timedelta(days=1)
         info = f"{s['name']}({s['id']}) 期間：{s['range']}"
         
+        # A. 今日出關 (結束日+1 = 今天)
         if exit_day == today:
             out_jail.append(info)
+        
+        # B. 今日新公告 (公告日 = 今天)
         elif s['announce'] == today:
             new_ann.append(f"🔔 {info}")
         
+        # C. 正在處置中 (只要結束日大於等於今天)
         if s['end'] >= today:
             if not any(s['id'] in x for x in new_ann):
                 still_in.append(info)
 
+    # 組合訊息
     msg = f"📅 報表日期：{today}\n\n"
     msg += "【🔔 今日新公告進關】\n" + ("\n".join(new_ann) if new_ann else "無") + "\n\n"
     msg += "【🔓 本日出關股票】\n" + ("\n".join(out_jail) if out_jail else "無") + "\n\n"
