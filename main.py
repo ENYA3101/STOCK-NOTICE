@@ -42,22 +42,40 @@ def get_real_data():
         data = r.json()
 
         for row in data:
-            s_id = row.get("證券代號", "").strip()
+            # 防呆抓欄位（避免表格微調）
+            s_id = (
+                row.get("證券代號")
+                or row.get("股票代號")
+                or ""
+            ).strip()
+
             if not s_id.isdigit():
                 continue
 
-            period = split_period(row.get("處置期間", ""))
+            raw_range = (
+                row.get("處置期間")
+                or row.get("處置區間")
+                or ""
+            ).strip()
+
+            period = split_period(raw_range)
             if not period:
                 continue
 
             all_stocks[s_id] = {
                 "id": s_id,
-                "name": row.get("證券名稱", "").strip(),
-                "announce": parse_date(row.get("公布日期")),
+                "name": (
+                    row.get("證券名稱")
+                    or row.get("股票名稱")
+                    or ""
+                ).strip(),
+                "announce": parse_date(
+                    row.get("公布日期") or row.get("公告日期")
+                ),
                 "start": parse_date(period[0]),
                 "end": parse_date(period[1]),
-                "range": row.get("處置期間", "").strip(),
-                "market": "上市"
+                "range": raw_range,
+                "market": "上市",
             }
     except Exception as e:
         print("TWSE error:", e)
@@ -74,24 +92,30 @@ def get_real_data():
         r = requests.get(url, headers=headers, timeout=10)
         content = r.content.decode("utf-8-sig", errors="ignore")
 
-        for row in csv.reader(io.StringIO(content)):
-            # 欄位：公布日[0], 代號[1], 名稱[2], 區間[3]
-            if len(row) < 4 or not row[1].isdigit():
-                continue
+        reader = csv.reader(io.StringIO(content))
+        header = next(reader, None)
 
-            period = split_period(row[3])
-            if not period:
+        for row in reader:
+            if len(row) < 4:
                 continue
 
             s_id = row[1].strip()
+            if not s_id.isdigit():
+                continue
+
+            raw_range = row[3].strip()
+            period = split_period(raw_range)
+            if not period:
+                continue
+
             all_stocks[s_id] = {
                 "id": s_id,
                 "name": row[2].strip(),
                 "announce": parse_date(row[0]),
                 "start": parse_date(period[0]),
                 "end": parse_date(period[1]),
-                "range": row[3].strip(),
-                "market": "上櫃"
+                "range": raw_range,
+                "market": "上櫃",
             }
     except Exception as e:
         print("TPEx error:", e)
