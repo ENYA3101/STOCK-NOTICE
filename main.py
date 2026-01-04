@@ -3,8 +3,8 @@ import datetime
 import os
 import csv
 import io
-import time
 import re
+
 
 def parse_date(date_str):
     if not date_str:
@@ -20,10 +20,10 @@ def parse_date(date_str):
     return None
 
 
-def split_period(raw_range):
-    if not raw_range:
+def split_period(raw):
+    if not raw:
         return None
-    parts = re.split(r'[~～\-]', raw_range.replace(" ", ""))
+    parts = re.split(r"[~～\-]", raw.replace(" ", ""))
     if len(parts) >= 2:
         return parts[0], parts[1]
     return None
@@ -32,85 +32,70 @@ def split_period(raw_range):
 def get_real_data():
     all_stocks = {}
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        "User-Agent": "Mozilla/5.0"
     }
-    today = datetime.date.today()
 
-    for i in range(21):
-        target_date = today - datetime.timedelta(days=i)
+    # =====================
+    # 1. TWSE（上市）
+    # =====================
+    try:
+        url = "https://www.twse.com.tw/announcement/punish?response=open_data"
+        r = requests.get(url, headers=headers, timeout=10)
+        data = r.json()
 
-        # =====================
-        # 1. 上市 TWSE
-        # =====================
-        try:
-            date_twse = target_date.strftime("%Y%m%d")
-            url_twse = f"https://www.twse.com.tw/zh/announcement/punish?response=csv&date={date_twse}"
-            r = requests.get(url_twse, headers=headers, timeout=10)
+        for row in data:
+            # 欄位名稱以實際 open_data 為準
+            s_id = row.get("StockNo", "").strip()
+            if not s_id.isdigit():
+                continue
 
-            if r.status_code == 200 and len(r.content) > 100:
-                content = (
-                    r.content.decode('utf-8-sig', errors='ignore')
-                    if b'\xef\xbb\xbf' in r.content
-                    else r.content.decode('cp950', errors='ignore')
-                )
+            period = split_period(row.get("PunishDate", ""))
+            if not period:
+                continue
 
-                for row in csv.reader(io.StringIO(content)):
-                    if len(row) > 6 and row[2].strip().isdigit():
-                        period = split_period(row[6])
-                        if not period:
-                            continue
+            all_stocks[s_id] = {
+                "id": s_id,
+                "name": row.get("StockName", "").strip(),
+                "announce": parse_date(row.get("AnnounceDate")),
+                "start": parse_date(period[0]),
+                "end": parse_date(period[1]),
+                "range": row.get("PunishDate", "").strip(),
+            }
+    except Exception as e:
+        print("TWSE error:", e)
 
-                        s_id = row[2].strip()
-                        all_stocks[s_id] = {
-                            'id': s_id,
-                            'name': row[3].strip(),
-                            'announce': parse_date(row[1]),
-                            'start': parse_date(period[0]),
-                            'end': parse_date(period[1]),
-                            'range': row[6].strip()
-                        }
-        except Exception as e:
-            print("TWSE error:", e)
+    # =====================
+    # 2. TPEx（上櫃）
+    # =====================
+    try:
+        url = (
+            "https://www.tpex.org.tw/web/bulletin/"
+            "disposal_information/disposal_information_result.php"
+            "?l=zh-tw&o=data"
+        )
+        r = requests.get(url, headers=headers, timeout=10)
+        content = r.content.decode("utf-8-sig", errors="ignore")
 
-        # =====================
-        # 2. 上櫃 TPEx
-        # =====================
-        try:
-            date_tpex = f"{target_date.year - 1911}/{target_date.strftime('%m/%d')}"
-            url_tpex = (
-                "https://www.tpex.org.tw/web/stock/margin_trading/"
-                "disposal/disposal_result.php"
-                f"?l=zh-tw&d={date_tpex}&o=csv"
-            )
-            r = requests.get(url_tpex, headers=headers, timeout=10)
+        for row in csv.reader(io.StringIO(content)):
+            # 欄位：公布日[0], 代號[1], 名稱[2], 區間[3]
+            if len(row) < 4 or not row[1].isdigit():
+                continue
 
-            if r.status_code == 200 and len(r.content) > 100:
-                content = (
-                    r.content.decode('utf-8-sig', errors='ignore')
-                    if b'\xef\xbb\xbf' in r.content
-                    else r.content.decode('cp950', errors='ignore')
-                )
+            period = split_period(row[3])
+            if not period:
+                continue
 
-                for row in csv.reader(io.StringIO(content)):
-                    if len(row) > 4 and row[2].strip().isdigit():
-                        period = split_period(row[4])
-                        if not period:
-                            continue
-
-                        s_id = row[2].strip()
-                        all_stocks[s_id] = {
-                            'id': s_id,
-                            'name': row[3].strip(),
-                            'announce': parse_date(row[1]),
-                            'start': parse_date(period[0]),
-                            'end': parse_date(period[1]),
-                            'range': row[4].strip()
-                        }
-        except Exception as e:
-            print("TPEx error:", e)
-
-        if i % 5 == 0:
-            time.sleep(0.3)
+            s_id = row[1].strip()
+            all_stocks[s_id] = {
+                "id": s_id,
+                "name": row[2].strip(),
+                "announce": parse_date(row[0]),
+                "start": parse_date(period[0]),
+                "end": parse_date(period[1]),
+                "range": row[3].strip(),
+            }
+    except Exception as e:
+        print("TPEx error:", e)
 
     return list(all_stocks.values())
 
@@ -122,23 +107,23 @@ def main():
     new_ann, out_jail, still_in = [], [], []
 
     for s in stocks:
-        if not s['end']:
+        if not s["end"]:
             continue
 
-        exit_day = s['end'] + datetime.timedelta(days=1)
+        exit_day = s["end"] + datetime.timedelta(days=1)
         info = f"{s['name']}({s['id']}) 期間：{s['range']}"
 
-        if s['announce'] == today:
+        if s["announce"] == today:
             new_ann.append(f"🔔 {info}")
 
         if exit_day == today:
             out_jail.append(info)
 
-        if s['end'] >= today and not any(s['id'] in x for x in new_ann):
+        if s["end"] >= today and not any(s["id"] in x for x in new_ann):
             still_in.append(info)
 
     msg = (
-        f"📅 報表日期：{today}\n(歷史 20 日資料彙整)\n\n"
+        f"📅 報表日期：{today}\n\n"
         "【🔔 今日新公告進關】\n"
         + ("\n".join(new_ann) if new_ann else "無")
         + "\n\n【🔓 本日出關股票】\n"
@@ -155,7 +140,7 @@ def main():
             json={"chat_id": chat_id, "text": msg}
         )
 
-    print(f"完成！共彙整 {len(stocks)} 筆不重複資料。")
+    print(f"完成！共彙整 {len(stocks)} 筆資料。")
 
 
 if __name__ == "__main__":
