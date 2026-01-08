@@ -7,245 +7,311 @@ import re
 import pytz
 
 # ===========================
-# 1. 自動抓取證交所休市表 (API)
+# 1. 設定與工具函式
 # ===========================
+
+# 設定時區
+TW_TZ = pytz.timezone("Asia/Taipei")
+
 def get_twse_holidays():
     """
-    從證交所抓取該年度休市日清單 (只抓平日的休市日)
-    URL: https://www.twse.com.tw/rwd/zh/holiday/holidaySchedule
+    抓取證交所休市日 (自動切換民國年對應的西元)
     """
     url = "https://www.twse.com.tw/rwd/zh/holiday/holidaySchedule"
     holiday_set = set()
-    
     try:
-        # 預設抓取當年度
         r = requests.get(url, timeout=10)
         data = r.json()
-        
         if "data" in data:
             for item in data["data"]:
-                # item["Date"] 格式通常是 "114/01/01" (民國年/月/日)
+                # Date 格式通常為 "115/01/01" 或 "2026/01/01"
                 raw_date = item.get("Date", "")
                 if raw_date:
                     parts = raw_date.split('/')
                     if len(parts) == 3:
-                        # 民國轉西元
-                        y = int(parts[0]) + 1911
+                        y = int(parts[0])
+                        # 如果是民國年 (例如 115)，轉西元
+                        if y < 1911:
+                            y += 1911
                         m = int(parts[1])
                         d = int(parts[2])
                         holiday_set.add(datetime.date(y, m, d))
     except Exception as e:
-        print(f"⚠️ 無法抓取休市表 (將僅依賴週末判斷): {e}")
-    
+        print(f"⚠️ 無法抓取休市表 (僅依賴週末判斷): {e}")
     return holiday_set
 
-# 全域變數：執行時先抓一次，避免重複請求
+# 快取休市日資料
 CACHED_HOLIDAYS = get_twse_holidays()
 
-# ===========================
-# 2. 日期處理工具
-# ===========================
-def parse_date(date_str):
-    if not date_str: return None
-    s = "".join(filter(str.isdigit, str(date_str)))
-    try:
-        if len(s) == 7:  # 民國 1140102
-            year = int(s[:3]) + 1911
-            return datetime.date(year, int(s[3:5]), int(s[5:]))
-        elif len(s) == 8:  # 西元 20250102
-            return datetime.date(int(s[:4]), int(s[4:6]), int(s[6:]))
-    except:
-        return None
-    return None
-
-def split_period(raw):
-    if not raw: return None
-    parts = re.split(r"[~～\-]", str(raw).replace(" ", ""))
-    return (parts[0], parts[1]) if len(parts) >= 2 else None
-
-def next_trading_day(d):
-    """ 
-    推算下一個交易日 
-    邏輯：先 +1 天，如果是週末或國定假日，就繼續 +1，直到是工作日 
-    """
-    d = d + datetime.timedelta(days=1)
-    while True:
-        # 0=Mon, ..., 5=Sat, 6=Sun
-        is_weekend = d.weekday() >= 5
-        is_holiday = d in CACHED_HOLIDAYS
-        
-        if is_weekend or is_holiday:
-            d = d + datetime.timedelta(days=1)
-        else:
-            break
-    return d
-
-def is_trading_day(d):
-    """ 判斷某天是否為交易日 """
-    if d.weekday() >= 5: return False
-    if d in CACHED_HOLIDAYS: return False
+def is_trading_day(date_obj):
+    """ 判斷是否為交易日 (排除週末與休市日) """
+    if date_obj.weekday() >= 5: # 5=週六, 6=週日
+        return False
+    if date_obj in CACHED_HOLIDAYS:
+        return False
     return True
 
+def get_next_trading_day(current_date):
+    """ 取得下一個交易日 """
+    next_d = current_date + datetime.timedelta(days=1)
+    while not is_trading_day(next_d):
+        next_d += datetime.timedelta(days=1)
+    return next_d
+
+def parse_roc_date(date_str):
+    """ 解析民國字串 (例如 1150102) 轉 date 物件 """
+    if not date_str: return None
+    s = "".join(filter(str.isdigit, str(date_str)))
+    if len(s) == 7:
+        y = int(s[:3]) + 1911
+        m = int(s[3:5])
+        d = int(s[5:])
+        return datetime.date(y, m, d)
+    return None
+
+def split_period(raw_str):
+    """ 分割日期區間字串 (支援 ~ 或 -) """
+    if not raw_str: return None, None
+    clean_str = str(raw_str).replace(" ", "")
+    # 常見分隔符號
+    parts = re.split(r"[~～\-]", clean_str)
+    if len(parts) >= 2:
+        return parse_roc_date(parts[0]), parse_roc_date(parts[1])
+    return None, None
+
 def format_md(d):
+    """ 格式化日期 MM/DD """
     return d.strftime('%m/%d') if d else "??"
 
 # ===========================
-# 3. 資料抓取核心
+# 2. 資料抓取
 # ===========================
-def get_real_data():
+
+def get_disposition_stocks():
+    """ 整合上市與上櫃的處置股資料 """
     all_stocks = []
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+    
+    # 時間範圍：抓前後寬鬆一點，確保涵蓋到處置期間
+    today = datetime.datetime.now(TW_TZ).date()
+    start_lookback = (today - datetime.timedelta(days=20)).strftime('%Y%m%d')
+    end_lookahead = (today + datetime.timedelta(days=40)).strftime('%Y%m%d')
 
-    today = datetime.date.today()
-    start_str = (today - datetime.timedelta(days=10)).strftime('%Y%m%d')
-    end_str = (today + datetime.timedelta(days=30)).strftime('%Y%m%d')
-
-    # --- TWSE（上市） ---
-    twse_url = "https://www.twse.com.tw/rwd/zh/announcement/punish"
-    params = {"response": "json", "startDate": start_str, "endDate": end_str}
+    # --- 上市 (TWSE) ---
     try:
+        twse_url = "https://www.twse.com.tw/rwd/zh/announcement/punish"
+        params = {"response": "json", "startDate": start_lookback, "endDate": end_lookahead}
         r = requests.get(twse_url, params=params, headers=headers, timeout=10)
-        if r.status_code == 200:
-            rows = r.json().get("data", [])
-            for row in rows:
-                if len(row) < 5: continue
-                s_id = str(row[2]).strip().split('.')[0]
-                s_name = str(row[3]).strip()
-                
-                raw_range = ""
+        data = r.json()
+        
+        if "data" in data:
+            for row in data["data"]:
+                # TWSE 格式通常: [序號, 公告日, 證券代號, 證券名稱, 處置條件, 處置起迄時間, ...]
+                # 尋找含有 '~' 的欄位作為日期區間
+                period_str = ""
                 for col in row:
-                    if "~" in str(col) or "～" in str(col):
-                        raw_range = str(col).strip()
+                    if isinstance(col, str) and ("~" in col or "～" in col):
+                        period_str = col
                         break
                 
-                period = split_period(raw_range)
-                if s_id.isdigit() and period:
+                start_d, end_d = split_period(period_str)
+                if start_d and end_d:
+                    # 處理代號 (去除可能的空白或非數字前綴，保留如 30061)
+                    stock_id = str(row[2]).strip()
+                    stock_name = str(row[3]).strip()
                     all_stocks.append({
-                        "id": s_id, "name": s_name, "market": "上市",
-                        "announce": parse_date(row[1]),
-                        "start": parse_date(period[0]),
-                        "end": parse_date(period[1])
+                        "market": "上市",
+                        "id": stock_id,
+                        "name": stock_name,
+                        "start": start_d,
+                        "end": end_d
                     })
-    except Exception: pass
+    except Exception as e:
+        print(f"Error fetching TWSE: {e}")
 
-    # --- TPEx（上櫃） ---
+    # --- 上櫃 (TPEx) ---
     try:
+        # 上櫃 CSV 連結
         tpex_url = "https://www.tpex.org.tw/web/bulletin/disposal_information/disposal_information_result.php?l=zh-tw&o=data"
         r = requests.get(tpex_url, headers=headers, timeout=10)
-        r.encoding = 'utf-8-sig'
-        reader = csv.reader(io.StringIO(r.text))
-        next(reader, None)
-
-        for row in reader:
+        # 上櫃通常是 UTF-8-SIG 或 CP950，這裡用 auto decode
+        r.encoding = 'utf-8' 
+        
+        csv_data = csv.reader(io.StringIO(r.text))
+        # 跳過標題 (通常第一行是標題)
+        header_skipped = False
+        for row in csv_data:
+            if not header_skipped:
+                header_skipped = True
+                continue
+            
             if len(row) < 4: continue
-            s_id = row[1].strip()
-            period = split_period(row[3])
-            if s_id and period:
+            
+            # TPEx CSV 格式: [公告日, 證券代號, 證券名稱, 處置起迄時間, ...]
+            # 需注意上櫃 CSV 有時第一欄是日期
+            stock_id = row[1].strip()
+            stock_name = row[2].strip()
+            period_str = row[3].strip()
+            
+            start_d, end_d = split_period(period_str)
+            
+            if start_d and end_d:
                 all_stocks.append({
-                    "id": s_id, "name": row[2].strip(), "market": "上櫃",
-                    "announce": parse_date(row[0]),
-                    "start": parse_date(period[0]),
-                    "end": parse_date(period[1])
+                    "market": "上櫃",
+                    "id": stock_id,
+                    "name": stock_name,
+                    "start": start_d,
+                    "end": end_d
                 })
-    except Exception: pass
+
+    except Exception as e:
+        print(f"Error fetching TPEx: {e}")
 
     return all_stocks
 
 # ===========================
-# 4. 主程式
+# 3. 主程式邏輯
 # ===========================
+
 def main():
-    tz = pytz.timezone("Asia/Taipei")
-    today = datetime.datetime.now(tz).date()
+    today = datetime.datetime.now(TW_TZ).date()
     
-    # 檢查今天是否休市 (如果是休市日，可以在這裡決定是否不發送訊息，或在訊息中標註)
-    market_is_open = is_trading_day(today)
+    # 判斷今日狀態
+    market_open = is_trading_day(today)
     
-    # 計算「明天」的定義 (下一個交易日)
-    if market_is_open:
-        next_day = next_trading_day(today)
+    # 計算「下個交易日」
+    # 如果今天是交易日，Next就是明天(或下週一)
+    # 如果今天是假日，Next就是下一個開盤日
+    if market_open:
+        next_trading_day_val = get_next_trading_day(today)
     else:
-        # 如果今天是假日，next_day 就是下一個開盤日
-        # 例如今天是週六，next_day 就是週一
-        next_day = next_trading_day(today - datetime.timedelta(days=1))
+        # 假設今天是假日，我們要顯示的 "下個交易日" 依然是接下來要開盤的那天
+        # 但為了計算邏輯，我們先找出今天的 "有效下一天"
+        next_trading_day_val = get_next_trading_day(today)
 
-    raw_stocks = get_real_data()
+    # 抓取原始資料
+    raw_data = get_disposition_stocks()
 
-    # 資料去重 (保留結束日最晚的)
-    unique_stocks = {}
-    for s in raw_stocks:
+    # 資料去重 (保留結束日最晚的，以防同一檔股票有多筆處置資料)
+    unique_map = {}
+    for s in raw_data:
         key = (s["market"], s["id"])
-        if key not in unique_stocks or s["end"] > unique_stocks[key]["end"]:
-            unique_stocks[key] = s
+        # 如果尚未存在，或這筆資料的結束日比已存在的更晚 (延長處置)，則更新
+        if key not in unique_map or s["end"] > unique_map[key]["end"]:
+            unique_map[key] = s
     
-    stocks = sorted(unique_stocks.values(), key=lambda x: (x["market"], x["id"]))
+    # 排序：先上市後上櫃 (顯示時分開)，內部分類依代號排序
+    stocks = sorted(unique_map.values(), key=lambda x: x['id'])
 
-    result = {
+    # 準備容器
+    results = {
         "上市": {"today_out": [], "tomorrow_out": [], "today_in": [], "still_in": []},
-        "上櫃": {"today_out": [], "tomorrow_out": [], "today_in": [], "still_in": []},
+        "上櫃": {"today_out": [], "tomorrow_out": [], "today_in": [], "still_in": []}
     }
 
     for s in stocks:
-        if not s["end"]: continue
-
         market = s["market"]
-        date_range = f"({format_md(s['start'])} ~ {format_md(s['end'])})"
-        info = f"`{s['id']}` {s['name']} {date_range}"
-
-        # --- 核心邏輯 ---
-        # 1. 恢復交易日 = 處置結束日(s['end']) 的「下一個交易日」
-        resumption_date = next_trading_day(s["end"]) 
+        # 該股的恢復交易日 (處置結束日的下一個交易日)
+        resumption_date = get_next_trading_day(s["end"])
         
-        # 2. 開始處置日 = 公告日的「下一個交易日」
-        enter_date = next_trading_day(s["announce"]) if s["announce"] else s["start"]
+        # 格式化顯示字串
+        display_str = f"{s['id']} {s['name']} ({format_md(s['start'])} ~ {format_md(s['end'])})"
 
-        # --- 分類 ---
-        if today == resumption_date:
-            # 只有在今天真的是交易日時，才算「今日出關」
-            # 如果今天休市(例如跑程式抓資料備用)，它依然算今日出關，但實際交易是下次開盤
-            result[market]["today_out"].append(info)
+        # --- 分類邏輯 ---
+        
+        # 1. 今日出關: 恢復交易日就是今天
+        if resumption_date == today:
+            results[market]["today_out"].append(display_str)
+        
+        # 2. 明日出關: 恢復交易日是下一個交易日 (意即今天是處置最後一天)
+        elif resumption_date == next_trading_day_val:
+            results[market]["tomorrow_out"].append(display_str)
             
-        elif resumption_date == next_day:
-            # 明天(下個交易日)恢復交易 = 今天是坐牢最後一天
-            result[market]["tomorrow_out"].append(info)
+        # 3. 今日進關: 處置開始日是今天
+        elif s["start"] == today:
+            results[market]["today_in"].append(display_str)
             
-        elif today == enter_date:
-            result[market]["today_in"].append(info)
+        # 4. 處置中: 今天介於開始與結束之間 (且不滿足上述條件)
+        # 注意: 避免與「明日出關」重複，因為明日出關代表今天還在處置中，
+        # 但為了資訊清晰，通常「明日出關」會獨立顯示，不放在「處置中」。
+        elif s["start"] <= today <= s["end"]:
+            results[market]["still_in"].append(display_str)
+
+    # ===========================
+    # 4. 輸出結果 (Markdown 格式)
+    # ===========================
+    
+    status_text = "(開盤)" if market_open else "(休市)"
+    # 日期顯示格式
+    date_header = f"📅 日期：{format_md(today)} {status_text}"
+    next_header = f"⏩ 下個交易日：{format_md(next_trading_day_val)}"
+
+    output = []
+    output.append(date_header)
+    output.append(next_header)
+    output.append("") # 空行
+
+    def build_section_text(market_name, data_dict):
+        section = []
+        section.append(f"🟥【{market_name}】")
+        
+        # 輔助函式：產生清單文字
+        def list_to_str(lst):
+            return "\n".join(lst) if lst else f"無 ({format_md(next_trading_day_val)} 出關)" if "今日出關" in title else "無"
+
+        # 今日出關
+        if data_dict["today_out"]:
+            section.append(f"🔓 今日出關:\n" + "\n".join(data_dict["today_out"]))
+        else:
+            # 依照你的範例，若無則顯示特定文字 (這裡預設顯示 無)
+            section.append(f"🔓 今日出關: 無")
+
+        section.append("") 
+
+        # 明日出關
+        if data_dict["tomorrow_out"]:
+            section.append(f"⏭️ 明日出關:\n" + "\n".join(data_dict["tomorrow_out"]))
+        else:
+            section.append(f"⏭️ 明日出關: 無")
+
+        section.append("")
+
+        # 今日進關
+        if data_dict["today_in"]:
+             section.append(f"🔔 今日進關:\n" + "\n".join(data_dict["today_in"]))
+        else:
+             section.append(f"🔔 今日進關: 無")
+
+        section.append("")
+
+        # 處置中
+        if data_dict["still_in"]:
+            section.append(f"⏳ 處置中:\n" + "\n".join(data_dict["still_in"]))
+        else:
+            section.append(f"⏳ 處置中: 無")
             
-        elif enter_date <= today <= s["end"]:
-            # 避免重複顯示在「明日出關」和「處置中」
-            if resumption_date != next_day:
-                result[market]["still_in"].append(info)
+        section.append("-" * 20)
+        return "\n".join(section)
 
-    def build_section(title, items):
-        if not items: return f"{title}: 無"
-        return f"{title}:\n" + "\n".join(items)
+    output.append(build_section_text("上市", results["上市"]))
+    output.append(build_section_text("上櫃", results["上櫃"]))
 
-    # 訊息標頭
-    msg = f"📅 日期：{today} " + ("(休市)" if not market_is_open else "(開盤)") + "\n"
-    msg += f"⏩ 下個交易日：{next_day}\n\n"
+    final_msg = "\n".join(output)
+    print(final_msg)
 
-    for market in ["上市", "上櫃"]:
-        msg += f"🟥【{market}】\n"
-        msg += build_section("🔓 今日出關", result[market]["today_out"]) + "\n\n"
-        msg += build_section("⏭️ 明日出關", result[market]["tomorrow_out"]) + "\n\n"
-        msg += build_section("🔔 今日進關", result[market]["today_in"]) + "\n\n"
-        msg += build_section("⏳ 處置中", result[market]["still_in"]) + "\n\n"
-        msg += "--------------------\n"
-
-    print(msg)
-
-    # 發送 Telegram
+    # --- 若需要發送到 Telegram，可保留以下程式碼 ---
     token = os.getenv("TG_TOKEN")
     chat_id = os.getenv("CHAT_ID")
     if token and chat_id:
         try:
             requests.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}
+                json={"chat_id": chat_id, "text": final_msg, "parse_mode": "Markdown"}
             )
         except Exception as e:
-            print(f"Telegram 發送失敗: {e}")
+            print(f"Telegram Send Error: {e}")
 
 if __name__ == "__main__":
     main()
