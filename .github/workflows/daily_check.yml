@@ -1,5 +1,9 @@
 name: TPEx Disposal Notify
-
+on:
+  schedule:
+    # 這裡使用 UTC 時間，台灣晚上 6:00 (18:00) 是 UTC 10:00
+    - cron: '05 16 * * *'
+  workflow_dispatch:
 
 jobs:
   build:
