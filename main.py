@@ -1,4 +1,4 @@
-import requests
+Import requests
 import datetime
 import os
 import csv
@@ -37,17 +37,6 @@ def next_trading_day(d):
 
 def parse_date(date_str):
     if not date_str: return None
-    
-    # 升級版：優先嘗試用正則抓取 yyyy/mm/dd 或 yyy/mm/dd，可相容未補零格式如 115/4/2
-    match = re.search(r'(\d{2,4})[-/](\d{1,2})[-/](\d{1,2})', str(date_str))
-    if match:
-        y, m, d = int(match.group(1)), int(match.group(2)), int(match.group(3))
-        if y < 1911: y += 1911
-        try:
-            return datetime.date(y, m, d)
-        except: pass
-            
-    # 退回原本純數字邏輯
     s = "".join(filter(str.isdigit, str(date_str)))
     try:
         if len(s) == 7: return datetime.date(int(s[:3])+1911, int(s[3:5]), int(s[5:]))
@@ -59,18 +48,15 @@ def parse_date(date_str):
 # ===========================
 def get_disposal_data():
     all_stocks = []
-    # 加上較完整的 User-Agent 降低被券商網站阻擋的機率
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+    headers = {"User-Agent": "Mozilla/5.0"}
     today = datetime.date.today()
     start_str = (today - datetime.timedelta(days=15)).strftime('%Y%m%d')
     end_str = (today + datetime.timedelta(days=30)).strftime('%Y%m%d')
 
-    # ---------------------------
     # 上市
-    # ---------------------------
     try:
         url = f"https://www.twse.com.tw/rwd/zh/announcement/punish?response=json&startDate={start_str}&endDate={end_str}"
-        resp = requests.get(url, headers=headers, timeout=10)
+        resp = requests.get(url, headers=headers)
         if resp.status_code == 200:
             data = resp.json().get("data", [])
             for row in data:
@@ -84,12 +70,10 @@ def get_disposal_data():
     except Exception as e:
         print(f"⚠️ 上市資料抓取錯誤: {e}")
 
-    # ---------------------------
     # 上櫃
-    # ---------------------------
     try:
         url = "https://www.tpex.org.tw/web/bulletin/disposal_information/disposal_information_result.php?l=zh-tw&o=data"
-        r = requests.get(url, headers=headers, timeout=10)
+        r = requests.get(url, headers=headers)
         r.encoding = 'utf-8-sig'
         reader = csv.reader(io.StringIO(r.text))
         next(reader, None)
@@ -104,78 +88,29 @@ def get_disposal_data():
     except Exception as e:
         print(f"⚠️ 上櫃資料抓取錯誤: {e}")
         
-    # ---------------------------
-    # 興櫃 (國票證券)
-    # ---------------------------
-    try:
-        url_ibfs = "https://www.ibfs.com.tw/stock3/measuringstock.aspx?xy=6&xt=1"
-        r = requests.get(url_ibfs, headers=headers, timeout=10)
-        
-        # 不額外依賴 bs4，用 Regex 解析 HTML 表格 <tr> <td>
-        trs = re.findall(r'<tr[^>]*>(.*?)</tr>', r.text, re.IGNORECASE | re.DOTALL)
-        for tr in trs:
-            tds = re.findall(r'<td[^>]*>(.*?)</td>', tr, re.IGNORECASE | re.DOTALL)
-            if len(tds) >= 4:
-                # 移除 HTML 標籤取得乾淨文字
-                cols = [re.sub(r'<[^>]+>', '', td).strip() for td in tds]
-                
-                # 排除表頭等無效行
-                if "證券名稱" in cols[0] or "代號" in cols[0]:
-                    continue
-                
-                stock_id, stock_name = None, None
-                for text in cols:
-                    # 匹配格式: "泰谷(3339)" 或是 "3339 泰谷" (排除數字與括號以抓取名稱)
-                    m1 = re.search(r'^([^\d\(\)\s]+)\s*\(?(\d{4,5})\)?$', text)
-                    m2 = re.search(r'^(\d{4,5})\s*([^\d\(\)\s]+)$', text)
-                    if m1:
-                        stock_name, stock_id = m1.group(1).strip(), m1.group(2)
-                        break
-                    elif m2:
-                        stock_id, stock_name = m2.group(1), m2.group(2).strip()
-                        break
-                
-                if not stock_id:
-                    continue
-                
-                # 尋找日期區間 (同一欄位中出現2個日期即視為處置區間)
-                for text in cols:
-                    dates = re.findall(r'\d{2,4}[-/]\d{1,2}[-/]\d{1,2}', text)
-                    if len(dates) >= 2:
-                        start_d = parse_date(dates[0])
-                        end_d = parse_date(dates[-1])
-                        # 公告日通常在表格第一欄
-                        announce_d = parse_date(cols[0])
-                        
-                        if start_d and end_d:
-                            all_stocks.append({
-                                "id": stock_id, "name": stock_name,
-                                "announce": announce_d, 
-                                "start": start_d, "end": end_d
-                            })
-                        break
-    except Exception as e:
-        print(f"⚠️ 興櫃資料抓取錯誤: {e}")
-        
     return all_stocks
 
 # ===========================
 # 3. 主執行
 # ===========================
 def main():
+    # 設定時區為台北，避免 GitHub 伺服器時間誤差
     tz = pytz.timezone("Asia/Taipei")
     today = datetime.datetime.now(tz).date()
     
+    # 判斷是否為交易日，決定「下個交易日」
     if is_trading_day(today):
         next_day = next_trading_day(today)
         market_status = "(開盤)"
     else:
+        # 如果今天是假日，我們還是顯示資訊，但標註休市
         next_day = next_trading_day(today)
         market_status = "(休市)"
 
     raw_data = get_disposal_data()
     unique_stocks = {}
     
+    # 過濾重複資料，取結束日期最晚的
     for s in raw_data:
         if not s["start"] or not s["end"]: continue
         if s["id"] not in unique_stocks or s["end"] > unique_stocks[s["id"]]["end"]:
@@ -187,6 +122,7 @@ def main():
         resumption_date = next_trading_day(s["end"])
         enter_date = next_trading_day(s["announce"]) if s["announce"] else s["start"]
         
+        # 使用 HTML 格式的 Code 標籤 <code>...</code>
         info = f"<code>{s['id']}</code> {s['name']} ({s['start'].strftime('%m/%d')} ~ {s['end'].strftime('%m/%d')})"
 
         if today == resumption_date:
@@ -198,6 +134,7 @@ def main():
         elif enter_date <= today <= s["end"]:
             status_groups["still_in"].append(info)
 
+    # 組建訊息 (使用 HTML 語法)
     msg = f"📅 <b>日期：{today}</b> {market_status}\n"
     msg += f"⏩ 下個交易日：{next_day}\n"
     msg += "━━━━━━━━━━━━━━━\n"
@@ -219,11 +156,15 @@ def main():
             msg += "無\n"
         msg += "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
     
+    # 在 Console 印出結果，方便在 GitHub Actions 檢查
     print(msg)
 
     # ===========================
-    # 4. Telegram 發送邏輯
+    # 4. Telegram 發送邏輯 (增強版)
     # ===========================
+    
+    # 讀取環境變數 (請確保 GitHub Secrets 名稱與此處一致)
+    # 這裡預設讀取 TG_TOKEN，如果沒有則嘗試讀取 TELEGRAM_TOKEN (相容性寫法)
     token = os.getenv("TG_TOKEN") or os.getenv("TELEGRAM_TOKEN")
     chat_id = os.getenv("CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID")
 
@@ -233,6 +174,7 @@ def main():
 
     if not token or not chat_id:
         print("❌ 錯誤：找不到 Telegram 設定。請檢查 GitHub Secrets 或 .env 檔案。")
+        # 不拋出錯誤，讓程式正常結束，但會紀錄 Log
         return
 
     try:
@@ -240,7 +182,7 @@ def main():
         payload = {
             "chat_id": chat_id, 
             "text": msg, 
-            "parse_mode": "HTML", 
+            "parse_mode": "HTML", # 改用 HTML 避免 Markdown 解析錯誤
             "disable_web_page_preview": True
         }
         
