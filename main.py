@@ -1,4 +1,4 @@
-Import requests
+import requests
 import datetime
 import os
 import csv
@@ -122,7 +122,7 @@ def main():
         resumption_date = next_trading_day(s["end"])
         enter_date = next_trading_day(s["announce"]) if s["announce"] else s["start"]
         
-        # 使用 HTML 格式的 Code 標籤 <code>...</code>
+        # 使用 HTML 格式的 Code 標籤
         info = f"<code>{s['id']}</code> {s['name']} ({s['start'].strftime('%m/%d')} ~ {s['end'].strftime('%m/%d')})"
 
         if today == resumption_date:
@@ -164,7 +164,6 @@ def main():
     # ===========================
     
     # 讀取環境變數 (請確保 GitHub Secrets 名稱與此處一致)
-    # 這裡預設讀取 TG_TOKEN，如果沒有則嘗試讀取 TELEGRAM_TOKEN (相容性寫法)
     token = os.getenv("TG_TOKEN") or os.getenv("TELEGRAM_TOKEN")
     chat_id = os.getenv("CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID")
 
@@ -174,7 +173,6 @@ def main():
 
     if not token or not chat_id:
         print("❌ 錯誤：找不到 Telegram 設定。請檢查 GitHub Secrets 或 .env 檔案。")
-        # 不拋出錯誤，讓程式正常結束，但會紀錄 Log
         return
 
     try:
@@ -182,7 +180,7 @@ def main():
         payload = {
             "chat_id": chat_id, 
             "text": msg, 
-            "parse_mode": "HTML", # 改用 HTML 避免 Markdown 解析錯誤
+            "parse_mode": "HTML", 
             "disable_web_page_preview": True
         }
         
